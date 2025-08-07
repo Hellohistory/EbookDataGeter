@@ -1,0 +1,48 @@
+name: Build and Release Executable
+
+on:
+  push:
+    tags:
+      - 'v*'
+
+jobs:
+  build-and-release:
+    runs-on: windows-2022
+
+    steps:
+      - name: Check out the repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python 3.8
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.8'
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+
+      - name: Build the executable with cx_Freeze
+        run: python setup.py build
+
+      - name: Package the application into a zip file
+        run: |
+          $ARTIFACT_DIR = "build/exe.win-amd64-3.8"
+          $ZIP_NAME = "EbookDataGeter-${{ github.ref_name }}-windows.zip"
+          Compress-Archive -Path "$ARTIFACT_DIR/*" -DestinationPath $ZIP_NAME
+          echo "ASSET_PATH=$ZIP_NAME" >> $env:GITHUB_ENV
+        shell: powershell
+
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: ${{ env.ASSET_PATH }}
+          name: "EbookDataGeter ${{ github.ref_name }}"
+          tag_name: ${{ github.ref_name }}
+          body: |
+            自动打包发布版本 ${{ github.ref_name }}。
+            - 操作系统：Windows
+            - Python 版本：3.8
+            - 打包工具：cx_Freeze
+          prerelease: false
