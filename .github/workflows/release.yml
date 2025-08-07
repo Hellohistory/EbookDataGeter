@@ -9,6 +9,8 @@ jobs:
   build-and-release:
     runs-on: windows-2022
 
+    permissions:
+      contents: write
     steps:
       - name: Check out the repository
         uses: actions/checkout@v4
@@ -34,7 +36,7 @@ jobs:
           echo "ASSET_PATH=$ZIP_NAME" >> $env:GITHUB_ENV
         shell: powershell
 
-      - name: Create GitHub Release
+      - name: Create or Update GitHub Release
         uses: softprops/action-gh-release@v2
         with:
           files: ${{ env.ASSET_PATH }}
@@ -42,7 +44,10 @@ jobs:
           tag_name: ${{ github.ref_name }}
           body: |
             自动打包发布版本 ${{ github.ref_name }}。
-            - 操作系统：Windows
-            - Python 版本：3.8
-            - 打包工具：cx_Freeze
+
+            - **操作系统**: Windows
+            - **Python 版本**: 3.8
+            - **打包工具**: cx_Freeze
+
+            欢迎下载使用！如有问题，请提交 Issue。
           prerelease: false
