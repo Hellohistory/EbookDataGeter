@@ -1,32 +1,33 @@
 # nlc_isbn.py
 
 import re
-import urllib.request
-
+import requests
 from bs4 import BeautifulSoup
-
 from headers import get_opacnlc_headers
 
 BASE_URL = "http://opac.nlc.cn/F"
-SEARCH_URL_TEMPLATE = BASE_URL + "?func=find-b&find_code=ISB&request={isbn}&local_base=NLC01" + \
-                      "&filter_code_1=WLN&filter_request_1=&filter_code_2=WYR&filter_request_2=" + \
-                      ("&filter_code_3=WYR&filter_request_3=&filter_code_4=WFM&filter_request_4=&filter_code_5=WSL"
-                       "&filter_request_5=")
 
 
 def get_dynamic_url(update_status):
     try:
-        response = urllib.request.urlopen(urllib.request.Request(BASE_URL, headers=get_opacnlc_headers()), timeout=10)
-        response_text = response.read().decode('utf-8')
-        dynamic_url_match = re.search(r"http://opac.nlc.cn:80/F/[^\s?]*", response_text)
+        # 使用 Session 保持会话状态
+        session = requests.Session()
+        session.headers.update(get_opacnlc_headers())
+
+        # 获取初始页面以获得动态URL
+        response = session.get(BASE_URL, timeout=10)
+        response.encoding = 'utf-8'
+
+        dynamic_url_match = re.search(r"http://opac.nlc.cn:80/F/[^\s?]*", response.text)
         if dynamic_url_match:
-            update_status(f"动态URL: {dynamic_url_match.group(0)}")
-            return dynamic_url_match.group(0)
+            dynamic_url = dynamic_url_match.group(0)
+            update_status(f"动态URL: {dynamic_url}")
+            return dynamic_url, session
         else:
             raise ValueError("无法找到动态URL")
     except Exception as e:
         update_status(f"获取动态URL时出错: {e}")
-        return None
+        return None, None
 
 
 def isbn2meta(isbn, update_status):
@@ -44,15 +45,34 @@ def isbn2meta(isbn, update_status):
         update_status(f"无效的ISBN代码: {isbn}")
         return None
 
-    dynamic_url = get_dynamic_url(update_status)
+    dynamic_url, session = get_dynamic_url(update_status)
     if not dynamic_url:
         return None
 
-    search_url = SEARCH_URL_TEMPLATE.format(isbn=isbn)
+    # 构建查询参数
+    params = {
+        "func": "find-b",
+        "find_code": "ISB",
+        "request": isbn,
+        "local_base": "NLC01",
+        "filter_code_1": "WLN",
+        "filter_request_1": "",
+        "filter_code_2": "WYR",
+        "filter_request_2": "",
+        "filter_code_3": "WYR",
+        "filter_request_3": "",
+        "filter_code_4": "WFM",
+        "filter_request_4": "",
+        "filter_code_5": "WSL",
+        "filter_request_5": ""
+    }
+
     try:
-        response = urllib.request.urlopen(urllib.request.Request(search_url, headers=get_opacnlc_headers()), timeout=10)
-        response_text = response.read().decode('utf-8')
-        soup = BeautifulSoup(response_text, "html.parser")
+        # 使用获取到的 session 和 dynamic_url 发起查询
+        response = session.get(dynamic_url, params=params, timeout=15)
+        response.encoding = 'utf-8'
+
+        soup = BeautifulSoup(response.text, "html.parser")
         return parse_metadata(soup, isbn, update_status)
     except Exception as e:
         update_status(f"获取元数据时出错: {e}")
@@ -67,6 +87,7 @@ def parse_metadata(soup, isbn, update_status):
     try:
         table = soup.find("table", attrs={"id": "td"})
         if not table:
+            # 有时候没有直接结果，可能是列表页，这里暂保留原逻辑，若无 table 则视为未找到
             return None
     except Exception as e:
         update_status(f"解析元数据时出错: {e}")

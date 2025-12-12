@@ -1,7 +1,11 @@
 import tkinter as tk
-import re
-from tkinter import messagebox, scrolledtext, filedialog
+from tkinter import filedialog
 import threading
+import ttkbootstrap as ttk
+from ttkbootstrap.constants import *
+from ttkbootstrap.scrolled import ScrolledText
+from ttkbootstrap.dialogs import Messagebox
+
 import nlc_isbn
 from formatting import format_metadata
 import pyperclip
@@ -9,160 +13,185 @@ import webbrowser
 import bookmarkget
 
 
-def search_isbn():
-    isbn = entry_isbn.get()
-    log_message("检索 ISBN: " + isbn)
-    update_status("正在检索...")
-    text_result.delete('1.0', tk.END)
-    text_bookmarks.delete('1.0', tk.END)
-    root.update_idletasks()
+class EbookDataGeterApp(ttk.Window):
+    def __init__(self):
+        super().__init__(themename="cosmo")  # 主题可选: cosmo, superhero, darkly, flatly
+        self.title("EbookDataGeter Pro")
+        self.geometry("1000x700")
+        try:
+            self.iconbitmap('logo.ico')
+        except:
+            pass
 
-    try:
-        # 启动线程以异步获取书签信息
-        threading.Thread(target=lambda: fetch_bookmark_info(isbn), daemon=True).start()
+        self.create_widgets()
 
-        # 同步执行元数据检索，并将update_status作为参数传递
-        metadata = nlc_isbn.isbn2meta(isbn, update_status)
+    def create_widgets(self):
+        # --- 顶部输入区 ---
+        input_frame = ttk.Labelframe(self, text="检索控制台", padding=15)
+        input_frame.pack(fill=X, padx=15, pady=10)
+
+        # ISBN 输入
+        ttk.Label(input_frame, text="ISBN 号码:").pack(side=LEFT, padx=(0, 5))
+
+        # 验证命令
+        vcmd = (self.register(self.validate_isbn_input), '%P')
+        self.entry_isbn = ttk.Entry(input_frame, width=30, validate='key', validatecommand=vcmd)
+        self.entry_isbn.pack(side=LEFT, padx=5)
+        self.entry_isbn.bind("<Return>", lambda event: self.search_isbn())  # 回车键查询
+
+        # 功能按钮群
+        self.btn_search = ttk.Button(input_frame, text="🔍 开始查询", command=self.search_isbn, bootstyle=PRIMARY)
+        self.btn_search.pack(side=LEFT, padx=10)
+
+        ttk.Separator(input_frame, orient=VERTICAL).pack(side=LEFT, fill=Y, padx=10)
+
+        self.btn_copy_meta = ttk.Button(input_frame, text="📋 复制元数据", command=self.copy_to_clipboard,
+                                        bootstyle="outline-secondary")
+        self.btn_copy_meta.pack(side=LEFT, padx=5)
+
+        self.btn_copy_bm = ttk.Button(input_frame, text="📑 复制书签", command=self.copy_bookmarks_to_clipboard,
+                                      bootstyle="outline-secondary")
+        self.btn_copy_bm.pack(side=LEFT, padx=5)
+
+        self.btn_save = ttk.Button(input_frame, text="💾 保存书签", command=self.save_bookmarks_to_file,
+                                   bootstyle="outline-success")
+        self.btn_save.pack(side=LEFT, padx=5)
+
+        # --- 进度条 (默认隐藏) ---
+        self.progress = ttk.Progressbar(self, mode=INDETERMINATE, bootstyle="info-striped")
+
+        # --- 主要内容展示区 (PanedWindow 分割) ---
+        paned_window = ttk.Panedwindow(self, orient=HORIZONTAL)
+        paned_window.pack(fill=BOTH, expand=True, padx=15, pady=5)
+
+        # 左侧：元数据
+        frame_left = ttk.Labelframe(paned_window, text="📚 图书元数据", padding=10)
+        paned_window.add(frame_left, weight=1)
+        self.text_result = ScrolledText(frame_left, font=("Consolas", 10))
+        self.text_result.pack(fill=BOTH, expand=True)
+
+        # 右侧：目录书签
+        frame_right = ttk.Labelframe(paned_window, text="🔖 目录书签", padding=10)
+        paned_window.add(frame_right, weight=1)
+        self.text_bookmarks = ScrolledText(frame_right, font=("Consolas", 10))
+        self.text_bookmarks.pack(fill=BOTH, expand=True)
+
+        # --- 底部日志与状态区 ---
+        bottom_frame = ttk.Frame(self)
+        bottom_frame.pack(fill=X, padx=15, pady=10)
+
+        # 日志区
+        log_frame = ttk.Labelframe(bottom_frame, text="运行日志", padding=5)
+        log_frame.pack(side=TOP, fill=X)
+        self.text_log = ScrolledText(log_frame, height=5, font=("Arial", 9))
+        self.text_log.pack(fill=BOTH, expand=True)
+
+        # 状态栏与链接
+        status_frame = ttk.Frame(bottom_frame)
+        status_frame.pack(side=TOP, fill=X, pady=(5, 0))
+
+        self.status_label = ttk.Label(status_frame, text="就绪", bootstyle="inverse-secondary", padding=5)
+        self.status_label.pack(side=LEFT, fill=X, expand=True)
+
+        link_frame = ttk.Frame(status_frame)
+        link_frame.pack(side=RIGHT)
+
+        btn_gitee = ttk.Button(link_frame, text="Gitee", command=self.open_gitee, bootstyle="link")
+        btn_gitee.pack(side=LEFT)
+        btn_github = ttk.Button(link_frame, text="GitHub", command=self.open_github, bootstyle="link")
+        btn_github.pack(side=LEFT)
+
+    def validate_isbn_input(self, new_value):
+        return new_value.isdigit() or new_value == ""
+
+    def search_isbn(self):
+        isbn = self.entry_isbn.get()
+        if not isbn:
+            Messagebox.show_warning("请输入ISBN号码", title="提示")
+            return
+
+        self.log_message(f"准备检索 ISBN: {isbn}")
+        self.update_status("正在连接数据库检索...")
+
+        self.text_result.text.delete('1.0', tk.END)
+        self.text_bookmarks.text.delete('1.0', tk.END)
+
+        # UI 状态切换
+        self.btn_search.config(state=DISABLED)
+        # 将进度条插入到输入框所在的 Labelframe 底部
+        self.progress.pack(in_=self.entry_isbn.master, fill=X, padx=15, pady=(5, 0))
+        self.progress.start(10)
+
+        threading.Thread(target=self.perform_search, args=(isbn,), daemon=True).start()
+
+    def perform_search(self, isbn):
+        # 1. 抓取元数据
+        try:
+            metadata = nlc_isbn.isbn2meta(isbn, lambda msg: self.safe_update_status(f"NLC: {msg}"))
+            self.after(0, lambda: self.handle_metadata_result(metadata))
+        except Exception as e:
+            self.after(0, lambda: self.log_message(f"❌ 元数据错误: {e}"))
+
+        # 2. 抓取书签
+        try:
+            self.safe_update_status("正在书葵网检索书签...")
+            bookmarks_info = bookmarkget.get_book_details(isbn)
+            self.after(0, lambda: self.text_bookmarks.text.insert(tk.END, bookmarks_info))
+        except Exception as e:
+            self.after(0, lambda: self.log_message(f"❌ 书签错误: {e}"))
+
+        self.after(0, self.finish_search)
+
+    def finish_search(self):
+        self.progress.stop()
+        self.progress.pack_forget()
+        self.btn_search.config(state=NORMAL)
+        self.update_status("检索任务结束")
+
+    def safe_update_status(self, message):
+        self.after(0, lambda: self.update_status(message))
+
+    def update_status(self, message):
+        self.status_label.config(text=message)
+
+    def handle_metadata_result(self, metadata):
         if metadata:
             formatted_result = format_metadata(metadata)
-            text_result.insert(tk.END, formatted_result)
-            update_status("检索完成")
+            self.text_result.text.insert(tk.END, formatted_result)
+            self.log_message("✅ 元数据检索成功")
         else:
-            text_result.insert(tk.END, "无法找到元数据。")
-            update_status("未找到数据")
-    except Exception as e:
-        messagebox.showerror("错误", str(e))
-        update_status("检索出错")
+            self.text_result.text.insert(tk.END, "❌ 未找到元数据。")
+            self.log_message("⚠️ 未找到元数据")
+
+    def log_message(self, message):
+        self.text_log.text.insert(tk.END, message + "\n")
+        self.text_log.text.see(tk.END)
+
+    def copy_to_clipboard(self):
+        text = self.text_result.text.get("1.0", tk.END)
+        pyperclip.copy(text)
+        self.update_status("元数据已复制")
+
+    def copy_bookmarks_to_clipboard(self):
+        text = self.text_bookmarks.text.get("1.0", tk.END)
+        pyperclip.copy(text)
+        self.update_status("书签已复制")
+
+    def save_bookmarks_to_file(self):
+        text = self.text_bookmarks.text.get("1.0", tk.END)
+        path = filedialog.asksaveasfilename(defaultextension=".txt", filetypes=[("TXT", "*.txt")])
+        if path:
+            with open(path, 'w', encoding='utf-8') as f:
+                f.write(text)
+            self.log_message(f"书签保存至: {path}")
+
+    def open_github(self):
+        webbrowser.open("https://github.com/Hellohistory/EbookDataTools")
+
+    def open_gitee(self):
+        webbrowser.open("https://github.com/Hellohistory/EbookDataTools")
 
 
-def fetch_bookmark_info(isbn):
-    try:
-        bookmarks_info = bookmarkget.get_book_details(isbn)
-        text_bookmarks.insert(tk.END, bookmarks_info)
-    except Exception as e:
-        messagebox.showerror("错误", str(e))
-
-
-def copy_to_clipboard():
-    text = text_result.get("1.0", tk.END)
-    pyperclip.copy(text)
-    log_message("信息已复制到剪贴板。")
-
-
-def copy_bookmarks_to_clipboard():
-    bookmarks_text = text_bookmarks.get("1.0", tk.END)
-    pyperclip.copy(bookmarks_text)
-    log_message("书签信息已复制到剪贴板。")
-
-
-def save_bookmarks_to_file():
-    bookmarks_text = text_bookmarks.get("1.0", tk.END)
-    file_path = filedialog.asksaveasfilename(defaultextension=".txt",
-                                             filetypes=[("文本文件", "*.txt"), ("所有文件", "*.*")])
-    if file_path:
-        with open(file_path, 'w', encoding='utf-8') as file:
-            file.write(bookmarks_text)
-        log_message("书签信息已保存到文件：" + file_path)
-
-
-def open_github():
-    webbrowser.open("https://github.com/Hellohistory/EbookDataTools")
-
-
-def open_gitee():
-    webbrowser.open("https://github.com/Hellohistory/EbookDataTools")
-
-
-def log_message(message):
-    text_log.insert(tk.END, message + "\n")
-
-
-def update_status(message):
-    status_label.config(text=message)
-
-
-def filter_input(event):
-    # 获取输入框的文本
-    input_text = entry_isbn.get()
-
-    # 使用正则表达式替换非数字字符为空字符串
-    filtered_text = re.sub(r'[^0-9]', '', input_text)
-
-    # 更新输入框的文本
-    entry_isbn.delete(0, tk.END)
-    entry_isbn.insert(0, filtered_text)
-
-
-# GUI样式配置
-FONT_NORMAL = ("Arial", 10)
-FONT_BOLD = ("Arial", 10, "bold")
-BACKGROUND_COLOR = "#F0F0F0"
-BUTTON_COLOR = "#E0E0E0"
-
-# 创建主窗口
-root = tk.Tk()
-root.title("EbookDataGeter")
-root.geometry("900x600")
-root.iconbitmap('logo.ico')
-root.configure(bg=BACKGROUND_COLOR)
-
-# 使用 Grid 布局
-root.grid_rowconfigure(1, weight=1)
-root.grid_columnconfigure(1, weight=1)
-
-# 状态栏
-status_label = tk.Label(root, text="就绪", bd=1, relief=tk.SUNKEN, anchor=tk.W, bg=BACKGROUND_COLOR, font=FONT_NORMAL)
-status_label.grid(row=2, column=0, columnspan=2, sticky="ew")
-
-# 创建并放置控件
-frame = tk.Frame(root, bg=BACKGROUND_COLOR)
-frame.grid(row=0, column=0, columnspan=2, sticky="ew", padx=10, pady=10)
-
-label_isbn = tk.Label(frame, text="请输入ISBN号码：", font=FONT_NORMAL, bg=BACKGROUND_COLOR)
-label_isbn.pack(side=tk.LEFT)
-
-# 创建输入框
-entry_isbn = tk.Entry(frame, font=FONT_NORMAL)
-entry_isbn.pack(side=tk.LEFT, padx=5)
-
-# 绑定输入过滤函数到文本变化事件
-entry_isbn.bind("<KeyRelease>", filter_input)
-
-button_search = tk.Button(frame, text="查询", command=search_isbn, bg=BUTTON_COLOR, font=FONT_BOLD)
-button_search.pack(side=tk.LEFT, padx=5)
-
-button_copy = tk.Button(frame, text="复制信息", command=copy_to_clipboard, bg=BUTTON_COLOR, font=FONT_BOLD)
-button_copy.pack(side=tk.LEFT, padx=5)
-
-button_copy_bookmarks = tk.Button(frame, text="复制书签信息", command=copy_bookmarks_to_clipboard, bg=BUTTON_COLOR,
-                                  font=FONT_BOLD)
-button_copy_bookmarks.pack(side=tk.LEFT, padx=5)
-
-button_save_bookmarks = tk.Button(frame, text="保存书签信息", command=save_bookmarks_to_file, bg=BUTTON_COLOR,
-                                  font=FONT_BOLD)
-button_save_bookmarks.pack(side=tk.LEFT, padx=5)
-
-text_result = scrolledtext.ScrolledText(root, height=10, font=FONT_NORMAL)
-text_result.grid(row=1, column=0, sticky="nsew", padx=10, pady=5)
-
-text_bookmarks = scrolledtext.ScrolledText(root, height=10, font=FONT_NORMAL)
-text_bookmarks.grid(row=1, column=1, sticky="nsew", padx=10, pady=5)
-
-text_log = scrolledtext.ScrolledText(root, height=5, font=FONT_NORMAL)
-text_log.grid(row=3, column=0, columnspan=2, sticky="nsew", padx=10, pady=5)
-
-# 创建一个Frame来包含两个链接
-link_frame = tk.Frame(root, bg=BACKGROUND_COLOR)
-link_frame.grid(row=4, column=1, sticky="se", padx=10, pady=5)
-
-# Gitee 链接
-gitee_link = tk.Label(link_frame, text="Gitee地址", fg="blue", cursor="hand1", bg=BACKGROUND_COLOR, font=FONT_NORMAL)
-gitee_link.pack(side=tk.RIGHT, padx=(2, 0))  # Pack用于在Frame内部排列
-gitee_link.bind("<Button-1>", lambda e: open_gitee())
-
-# Github 链接
-github_link = tk.Label(link_frame, text="Github地址", fg="blue", cursor="hand2", bg=BACKGROUND_COLOR, font=FONT_NORMAL)
-github_link.pack(side=tk.RIGHT, padx=(2, 2))
-github_link.bind("<Button-1>", lambda e: open_github())
-
-root.mainloop()
+if __name__ == "__main__":
+    app = EbookDataGeterApp()
+    app.mainloop()

@@ -1,3 +1,5 @@
 pyperclip
 beautifulsoup4
 cx_Freeze
+requests
+ttkbootstrap
